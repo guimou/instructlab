@@ -1,24 +1,191 @@
 # SPDX-License-Identifier: Apache-2.0
+# CUDA container for InstructLab
+# with flash-attn and BitsAndBytes packages
+ARG CUDA_VERSION="12.4.1"
 
-FROM nvcr.io/nvidia/cuda:12.4.1-devel-ubi9
-RUN dnf install -y python3.11 python3.11-devel git python3-pip make automake gcc gcc-c++
-WORKDIR /instructlab
-RUN python3.11 -m ensurepip
-RUN rpm -ivh https://dl.fedoraproject.org/pub/epel/epel-release-latest-9.noarch.rpm
-RUN dnf config-manager --add-repo https://developer.download.nvidia.com/compute/cuda/repos/rhel9/x86_64/cuda-rhel9.repo && dnf repolist && dnf config-manager --set-enabled cuda-rhel9-x86_64 && dnf config-manager --set-enabled cuda && dnf config-manager --set-enabled epel && dnf update -y
-RUN dnf install -y libcudnn8 nvidia-driver-NVML nvidia-driver-cuda-libs
-RUN python3.11 -m pip install --force-reinstall nvidia-cuda-nvcc-cu12
-RUN export LD_LIBRARY_PATH="$LD_LIBRARY_PATH:/usr/local/cuda/lib64:/usr/local/cuda/extras/CUPTI/lib64" \
-    && export CUDA_HOME=/usr/local/cuda \
-    && export PATH="/usr/local/cuda/bin:$PATH" \
-    && export XLA_TARGET=cuda120 \
-    && export XLA_FLAGS=--xla_gpu_cuda_data_dir=/usr/local/cuda
+#####################################################################################################
+# CUDA 12.4.1 Layer, from https://gitlab.com/nvidia/container-images/cuda/-/tree/master/dist/12.4.1 #
+#####################################################################################################
 
-ARG GIT_TAG=stable
-RUN if [[ "$(uname -m)" != "aarch64" ]]; then export CFLAGS="-mno-avx"; fi && \
-    CMAKE_ARGS="-DLLAMA_CUBLAS=on" python3.11 -m pip install -r https://raw.githubusercontent.com/instructlab/instructlab/${GIT_TAG}/requirements.txt --force-reinstall --no-cache-dir llama-cpp-python
-RUN python3.11 -m pip install git+https://github.com/instructlab/instructlab.git@${GIT_TAG}
+FROM registry.access.redhat.com/ubi9/python-311 as cuda-runtime
 
+USER 0
+
+# Base section
+
+ENV NVARCH x86_64
+ENV NVIDIA_REQUIRE_CUDA "cuda>=12.4 brand=tesla,driver>=470,driver<471 brand=unknown,driver>=470,driver<471 brand=nvidia,driver>=470,driver<471 brand=nvidiartx,driver>=470,driver<471 brand=geforce,driver>=470,driver<471 brand=geforcertx,driver>=470,driver<471 brand=quadro,driver>=470,driver<471 brand=quadrortx,driver>=470,driver<471 brand=titan,driver>=470,driver<471 brand=titanrtx,driver>=470,driver<471 brand=tesla,driver>=525,driver<526 brand=unknown,driver>=525,driver<526 brand=nvidia,driver>=525,driver<526 brand=nvidiartx,driver>=525,driver<526 brand=geforce,driver>=525,driver<526 brand=geforcertx,driver>=525,driver<526 brand=quadro,driver>=525,driver<526 brand=quadrortx,driver>=525,driver<526 brand=titan,driver>=525,driver<526 brand=titanrtx,driver>=525,driver<526 brand=tesla,driver>=535,driver<536 brand=unknown,driver>=535,driver<536 brand=nvidia,driver>=535,driver<536 brand=nvidiartx,driver>=535,driver<536 brand=geforce,driver>=535,driver<536 brand=geforcertx,driver>=535,driver<536 brand=quadro,driver>=535,driver<536 brand=quadrortx,driver>=535,driver<536 brand=titan,driver>=535,driver<536 brand=titanrtx,driver>=535,driver<536"
+ENV NV_CUDA_CUDART_VERSION 12.4.127-1
+
+COPY containers/cuda/cuda.repo-x86_64 /etc/yum.repos.d/cuda.repo
+RUN NVIDIA_GPGKEY_SUM=d0664fbbdb8c32356d45de36c5984617217b2d0bef41b93ccecd326ba3b80c87 && \
+    curl -fsSL https://developer.download.nvidia.com/compute/cuda/repos/rhel9/${NVARCH}/D42D0685.pub | sed '/^Version/d' > /etc/pki/rpm-gpg/RPM-GPG-KEY-NVIDIA && \
+    echo "$NVIDIA_GPGKEY_SUM  /etc/pki/rpm-gpg/RPM-GPG-KEY-NVIDIA" | sha256sum -c --strict -
+
+ENV CUDA_VERSION 12.4.1
+
+# For libraries in the cuda-compat-* package: https://docs.nvidia.com/cuda/eula/index.html#attachment-a
+RUN yum upgrade -y && yum install -y \
+    cuda-cudart-12-4-${NV_CUDA_CUDART_VERSION} \
+    cuda-compat-12-4 \
+    && yum clean all \
+    && rm -rf /var/cache/yum/*
+
+# nvidia-docker 1.0
+RUN echo "/usr/local/nvidia/lib" >> /etc/ld.so.conf.d/nvidia.conf && \
+    echo "/usr/local/nvidia/lib64" >> /etc/ld.so.conf.d/nvidia.conf
+
+ENV PATH /usr/local/nvidia/bin:/usr/local/cuda/bin:${PATH}
+ENV LD_LIBRARY_PATH /usr/local/nvidia/lib:/usr/local/nvidia/lib64
+
+COPY containers/cuda/NGC-DL-CONTAINER-LICENSE /
+
+# nvidia-container-runtime
+ENV NVIDIA_VISIBLE_DEVICES all
+ENV NVIDIA_DRIVER_CAPABILITIES compute,utility
+
+# Runtime section
+
+ENV NV_CUDA_LIB_VERSION 12.4.1-1
+
+ENV NV_NVTX_VERSION 12.4.127-1
+ENV NV_LIBNPP_VERSION 12.2.5.30-1
+ENV NV_LIBNPP_PACKAGE libnpp-12-4-${NV_LIBNPP_VERSION}
+ENV NV_LIBCUBLAS_VERSION 12.4.5.8-1
+ENV NV_LIBNCCL_PACKAGE_NAME libnccl
+ENV NV_LIBNCCL_PACKAGE_VERSION 2.21.5-1
+ENV NV_LIBNCCL_VERSION 2.21.5
+ENV NCCL_VERSION 2.21.5
+ENV NV_LIBNCCL_PACKAGE ${NV_LIBNCCL_PACKAGE_NAME}-${NV_LIBNCCL_PACKAGE_VERSION}+cuda12.4
+
+RUN yum install -y \
+    cuda-libraries-12-4-${NV_CUDA_LIB_VERSION} \
+    cuda-nvtx-12-4-${NV_NVTX_VERSION} \
+    ${NV_LIBNPP_PACKAGE} \
+    libcublas-12-4-${NV_LIBCUBLAS_VERSION} \
+    ${NV_LIBNCCL_PACKAGE} \
+    && yum clean all \
+    && rm -rf /var/cache/yum/*
+
+# Set these flags so that libraries can find the location of CUDA
+ENV XLA_FLAGS=--xla_gpu_cuda_data_dir=/usr/local/cuda \
+    XLA_TARGET="cuda120"
+
+# CUDA Devel image
+
+FROM cuda-runtime AS cuda-devel
+
+ENV NV_CUDA_LIB_VERSION 12.4.1-1
+ENV NV_NVPROF_VERSION 12.4.127-1
+ENV NV_NVPROF_DEV_PACKAGE cuda-nvprof-12-4-${NV_NVPROF_VERSION}
+ENV NV_CUDA_CUDART_DEV_VERSION 12.4.127-1
+ENV NV_NVML_DEV_VERSION 12.4.127-1
+ENV NV_LIBCUBLAS_DEV_VERSION 12.4.5.8-1
+ENV NV_LIBNPP_DEV_VERSION 12.2.5.30-1
+ENV NV_LIBNPP_DEV_PACKAGE libnpp-devel-12-4-${NV_LIBNPP_DEV_VERSION}
+ENV NV_LIBNCCL_DEV_PACKAGE_NAME libnccl-devel
+ENV NV_LIBNCCL_DEV_PACKAGE_VERSION 2.21.5-1
+ENV NCCL_VERSION 2.21.5
+ENV NV_LIBNCCL_DEV_PACKAGE ${NV_LIBNCCL_DEV_PACKAGE_NAME}-${NV_LIBNCCL_DEV_PACKAGE_VERSION}+cuda12.4
+ENV NV_CUDA_NSIGHT_COMPUTE_VERSION 12.4.1-1
+ENV NV_CUDA_NSIGHT_COMPUTE_DEV_PACKAGE cuda-nsight-compute-12-4-${NV_CUDA_NSIGHT_COMPUTE_VERSION}
+
+RUN yum install -y \
+    cuda-command-line-tools-12-4-${NV_CUDA_LIB_VERSION} \
+    cuda-libraries-devel-12-4-${NV_CUDA_LIB_VERSION} \
+    cuda-minimal-build-12-4-${NV_CUDA_LIB_VERSION} \
+    cuda-cudart-devel-12-4-${NV_CUDA_CUDART_DEV_VERSION} \
+    ${NV_NVPROF_DEV_PACKAGE} \
+    cuda-nvml-devel-12-4-${NV_NVML_DEV_VERSION} \
+    libcublas-devel-12-4-${NV_LIBCUBLAS_DEV_VERSION} \
+    ${NV_LIBNPP_DEV_PACKAGE} \
+    ${NV_LIBNCCL_DEV_PACKAGE} \
+    ${NV_CUDA_NSIGHT_COMPUTE_DEV_PACKAGE} \
+    && yum clean all \
+    && rm -rf /var/cache/yum/*
+
+ENV LIBRARY_PATH /usr/local/cuda/lib64/stubs
+
+##############################
+# InstructLab Building Layer #
+##############################
+
+FROM cuda-devel AS builder
+ARG PKG_CACHE=on
+ARG PYTHON=python3.11
+
+ENV PYTHON="${PYTHON}" \
+    APP_ROOT="/opt/app-root" \
+    VIRTUAL_ENV="${APP_ROOT}" \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_NO_COMPILE=1 \
+    PS1="(app-root) \w\$ " \
+    PKG_CACHE=${PKG_CACHE}
+
+RUN ${PYTHON} -m venv --upgrade-deps ${VIRTUAL_ENV} && \
+    find ${VIRTUAL_ENV} -name __pycache__ | xargs rm -rf && \
+    chown -R 1001:0 ${VIRTUAL_ENV}
+COPY --chown=1001:0 containers/sitecustomize.py ${VIRTUAL_ENV}/lib/${PYTHON}/site-packages/
+COPY --chown=1001:0 containers/bin/debug-* ${VIRTUAL_ENV}/bin/
+
+# -DLLAMA_NATIVE=off: work around a build problem with llama-cpp-python and gcc 11.
+# flash-attn is compiled from source, bitsandbytes has a manylinux wheel
+COPY requirements.txt /tmp
+RUN --mount=type=cache,sharing=locked,id=pipcache,target=/root/.cache/pip,mode=775 \
+    sed 's/\[.*\]//' /tmp/requirements.txt >/tmp/constraints.txt && \
+    if [ "${PKG_CACHE}" == "off" ]; then \
+        echo "pip cache off"; \
+        export PIP_NO_CACHE_DIR=off; \
+    else \
+        echo "pip cache on"; \
+        export PIP_NO_CACHE_DIR=; \
+        export PIP_CACHE_DIR=/root/.cache/pip; \
+        pip cache remove llama_cpp_python; \
+        pip cache remove flash_attn; \
+    fi && \
+    ${VIRTUAL_ENV}/bin/pip install wheel && \
+    CMAKE_ARGS="-DLLAMA_CUBLAS=on -DCMAKE_CUDA_ARCHITECTURES=all-major -DLLAMA_NATIVE=off" \
+        FORCE_CMAKE=1 \
+        ${VIRTUAL_ENV}/bin/pip install --no-binary llama_cpp_python -c /tmp/constraints.txt llama_cpp_python && \
+    ${VIRTUAL_ENV}/bin/pip install -r /tmp/requirements.txt && \
+    ${VIRTUAL_ENV}/bin/pip install --no-binary flash-attn -c /tmp/constraints.txt flash-attn && \
+    ${VIRTUAL_ENV}/bin/pip install -c /tmp/constraints.txt bitsandbytes && \
+    rm /tmp/constraints.txt && \
+    find ${VIRTUAL_ENV} -name __pycache__ | xargs rm -rf && \
+    chown -R 1001:0 ${VIRTUAL_ENV}
+
+COPY . /tmp/instructlab
+RUN ${VIRTUAL_ENV}/bin/pip install --no-deps /tmp/instructlab && \
+    find ${VIRTUAL_ENV} -name __pycache__ | xargs rm -rf && \
+    chown -R 1001:0 ${VIRTUAL_ENV}
+
+
+FROM cuda-runtime AS final
+
+ARG PYTHON=python3.11
+ENV PYTHON="${PYTHON}" \
+    APP_ROOT="/opt/app-root" \
+    VIRTUAL_ENV="${APP_ROOT}" \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_NO_COMPILE=1 \
+    PS1="(app-root) \w\$ "
+
+# include compiler and python devel for torch compile
+RUN --mount=type=cache,sharing=locked,id=dnf-ubi9,target=/var/cache/dnf \
+    export CUDA_DASHED_VERSION=$(echo ${CUDA_VERSION} | awk -F '.' '{ print $1"-"$2; }') && \
+    dnf upgrade -y --nodocs --setopt=keepcache=True && \
+    dnf install -y --nodocs --setopt=keepcache=True \
+        cuda-cupti-${CUDA_DASHED_VERSION} nvidia-driver-cuda-libs && \
+    if [ "${PKG_CACHE}" == "off" ]; then dnf clean all; fi
+
+COPY --from=builder --chown=1001:0 ${VIRTUAL_ENV} ${VIRTUAL_ENV}
+
+VOLUME ["/opt/app-root/src"]
+
+ENTRYPOINT []
 CMD ["/bin/bash"]
 
-LABEL com.redhat.component="instructlab"
+LABEL com.github.instructlab.instructlab.target="cuda" \
+      name="instructlab-cuda-${CUDA_VERSION}" \
+      summary="PyTorch, llama.cpp, and InstructLab NVIDIA CUDA" \
+      usage="podman run -it --device nvidia.com/gpu=0 --volume $HOME/.config/instructlab:/opt/app-root/src:z ..."

@@ -11,6 +11,7 @@ COMMON_DEPS = \
 	$(NULL)
 
 CUDA_CONTAINERFILE = $(CURDIR)/containers/cuda/Containerfile
+CUDA_VERSION ?= 12.4.1
 CUDA_DEPS = \
 	$(CUDA_CONTAINERFILE) \
 	$(COMMON_DEPS) \
@@ -60,6 +61,7 @@ images: ## Get the current controller, set the path, and build the Containerfile
 .PHONY: cuda
 cuda: check-engine $(CUDA_DEPS)  ## Build container for Nvidia CUDA
 	$(CENGINE) build $(BUILD_ARGS) \
+		--build-arg CUDA_VERSION="${CUDA_VERSION}" \
 		-t $(CONTAINER_PREFIX):$@ \
 		-f $(CUDA_CONTAINERFILE) \
 		.
@@ -186,46 +188,4 @@ endif
 .PHONY: md-lint
 md-lint: check-engine ## Lint markdown files
 	$(ECHO_PREFIX) printf "  %-12s ./...\n" "[MD LINT]"
-	$(CMD_PREFIX) $(CENGINE) run --rm -v $(CURDIR):/workdir --security-opt label=disable docker.io/davidanson/markdownlint-cli2:v0.12.1 > /dev/null
-
-.PHONY: toml-lint
-toml-lint: check-engine ## Lint pyproject.toml
-	$(ECHO_PREFIX) printf "  %-12s ./...\n" "[TOML LINT]"
-	$(CMD_PREFIX) $(CENGINE) run --rm -v $(CURDIR):/workdir --security-opt label=disable docker.io/tamasfe/taplo:0.8.1 lint /workdir/pyproject.toml
-
-.PHONY: toml-fmt
-toml-fmt: check-engine ## Format pyproject.toml
-	$(ECHO_PREFIX) printf "  %-12s ./...\n" "[TOML FMT]"
-	$(CMD_PREFIX) $(CENGINE) run --rm -v $(CURDIR):/workdir --security-opt label=disable docker.io/tamasfe/taplo:0.8.1 fmt /workdir/pyproject.toml
-
-.PHONY: check-tox
-check-tox:
-	@command -v tox &> /dev/null || (echo "'tox' is not installed" && exit 1)
-
-.PHONY: check-toolbox
-check-toolbox:
-	@command -v toolbox &> /dev/null || (echo "'toolbox' is not installed" && exit 1)
-
-.PHONY: check-engine
-check-engine:
-	@command -v $(CENGINE) &> /dev/null || (echo "'$(CENGINE)' container engine is not installed, you can override it with the 'CENGINE' variable" && exit 1)
-
-.PHONY: check-rocm
-check-rocm:
-	@command -v rocm &> /dev/null || (echo "'rocm' is not installed" && exit 1)
-
-.PHONY: action-lint actionlint
-action-lint: actionlint
-actionlint: ## Lint GitHub Action workflows
-	$(ECHO_PREFIX) printf "  %-12s .github/...\n" "[ACTION LINT]"
-	$(CMD_PREFIX) if ! command -v actionlint $(PIPE_DEV_NULL) ; then \
-		echo "Please install actionlint." ; \
-		echo "go install github.com/rhysd/actionlint/cmd/actionlint@latest" ; \
-		exit 1 ; \
-	fi
-	$(CMD_PREFIX) if ! command -v shellcheck $(PIPE_DEV_NULL) ; then \
-		echo "Please install shellcheck." ; \
-		echo "https://github.com/koalaman/shellcheck#user-content-installing" ; \
-		exit 1 ; \
-	fi
-	$(CMD_PREFIX) actionlint -color
+	$(CMD_PREFIX) podman run --rm -v $(CURDIR):/workdir --security-opt label=disable docker.io/davidanson/markdownlint-cli2:v0.12.1 > /dev/null
