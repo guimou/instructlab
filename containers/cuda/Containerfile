@@ -1,9 +1,11 @@
 # vim: syntax=dockerfile expandtab tabstop=4 shiftwidth=4
 
-ARG OS_VERSION_MAJOR=9
-ARG BASE_IMAGE=quay.io/centos/centos:stream${OS_VERSION_MAJOR}
+#ARG OS_VERSION_MAJOR=9
+ARG BASE_IMAGE=quay.io/sclorg/python-311-c9s:c9s
 
 FROM ${BASE_IMAGE}
+
+USER 0
 
 ARG OS_VERSION_MAJOR=9
 
@@ -16,9 +18,9 @@ ARG CUDA_MINOR_VERSION=12.4
 ARG CUDNN_MAJOR_VERSION=8
 
 # /opt/app-root structure (same as s2i-core and ubi9/python-311)
-ENV APP_ROOT=/opt/app-root \
-    HOME=/opt/app-root/src \
-    PATH=/opt/app-root/src/bin:/opt/app-root/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+# ENV APP_ROOT=/opt/app-root \
+#   HOME=/opt/app-root/src \
+#   PATH=/opt/app-root/src/bin:/opt/app-root/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 # Python, pip, and virtual env settings
 ARG PYTHON_VERSION=3.11
@@ -93,9 +95,7 @@ RUN dnf -y install --best --nodocs --setopt=install_weak_deps=False dnf-plugins-
         wget \
         which \
         lmdb \
-    && dnf clean all \
-    && ${PYTHON} -m venv --upgrade-deps ${VIRTUAL_ENV} \
-    && mkdir -p ${HOME}
+    && dnf clean all
 
 ENV OPENMPI_HOME="/usr/lib64/openmpi"
 
@@ -161,7 +161,7 @@ ENV CPLUS_INCLUDE_PATH="${CUDA_HOME}/include:${CPLUS_INCLUDE_PATH}"
 ENV CMAKE_INCLUDE_PATH="${CUDA_HOME}/include:${CMAKE_INCLUDE_PATH}"
 
 # Install Intel oneAPI repository for Intel oneMKL
-COPY containers/cuda/intel-oneapi.repo /etc/yum.repos.d/oneapi.repo
+COPY intel-oneapi.repo /etc/yum.repos.d/oneapi.repo
 RUN dnf config-manager --set-enabled intel-oneapi
 
 RUN dnf -y install --nodocs \
@@ -179,14 +179,18 @@ ENV C_INCLUDE_PATH="${INTEL_MKL_HOME}/include:${C_INCLUDE_PATH}"
 ENV CPLUS_INCLUDE_PATH="${INTEL_MKL_HOME}/include:${CPLUS_INCLUDE_PATH}"
 ENV CMAKE_INCLUDE_PATH="${INTEL_MKL_HOME}/include:${CMAKE_INCLUDE_PATH}"
 
-RUN source ${VIRTUAL_ENV}/bin/activate \
-    && if [ "${INSTRUCTLAB_VERSION}" != "" ] ; then \
+USER 1001
+
+RUN if [ "${INSTRUCTLAB_VERSION}" != "" ] ; then \
         INSTRUCTLAB_PKG="${INSTRUCTLAB_PKG}==${INSTRUCTLAB_VERSION}" ; \
     fi \
-    && pip install torch psutil \
+    && pip install --upgrade pip \
+    && pip install packaging wheel \
+    && pip install 'torch>=2.3.0,<2.4.0' 'psutil>=6.0.0' \
     && pip install flash_attn --no-build-isolation \
     && pip install "${INSTRUCTLAB_PKG}" -C cmake.args="-DLLAMA_CUDA=on" -C cmake.args="-DLLAMA_NATIVE=off" \
-    && pip install vllm@git+https://github.com/opendatahub-io/vllm@2024.08.01
+    && pip install vllm@git+https://github.com/opendatahub-io/vllm@2024.10.02 \
+    && pip install 'nvitop==1.3.2'
 
 ENV TORCH_HOME="${VIRTUAL_ENV}/lib64/${PYTHON}/site-packages/torch"
 ENV PYTORCH_HOME="${VIRTUAL_ENV}/lib64/${PYTHON}/site-packages/torch"
@@ -239,5 +243,5 @@ ENV C_INCLUDE_PATH="${PYTORCH_VISION_HOME}/include:${C_INCLUDE_PATH}"
 ENV CPLUS_INCLUDE_PATH="${PYTORCH_VISION_HOME}/include:${CPLUS_INCLUDE_PATH}"
 ENV CMAKE_INCLUDE_PATH="${PYTORCH_VISION_HOME}/include:${CMAKE_INCLUDE_PATH}"
 
-WORKDIR /instructlab
+WORKDIR /opt/app-root/src/instructlab
 ENTRYPOINT ["/bin/bash"]
