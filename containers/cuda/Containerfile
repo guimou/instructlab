@@ -188,9 +188,13 @@ RUN if [ "${INSTRUCTLAB_VERSION}" != "" ] ; then \
     && pip install packaging wheel \
     && pip install 'torch>=2.3.0,<2.4.0' 'psutil>=6.0.0' \
     && pip install flash_attn --no-build-isolation \
-    && pip install "${INSTRUCTLAB_PKG}" -C cmake.args="-DLLAMA_CUDA=on" -C cmake.args="-DLLAMA_NATIVE=off" \
+    && pip install "${INSTRUCTLAB_PKG}" -C cmake.args="-DGGML_CUDA=on" -C cmake.args="-DLLAMA_NATIVE=off" \
+    && CMAKE_ARGS="-DGGML_CUDA=on" FORCE_CMAKE=1 pip install --force-reinstall 'llama-cpp-python[server]==0.2.79' \
     && pip install vllm@git+https://github.com/opendatahub-io/vllm@2024.10.02 \
-    && pip install 'nvitop==1.3.2'
+    && pip install 'nvitop==1.3.2' \
+    # Fix permissions to support pip in Openshift environments \
+    && chmod -R g+w /opt/app-root/lib/python3.11/site-packages \
+    && fix-permissions /opt/app-root -P
 
 ENV TORCH_HOME="${VIRTUAL_ENV}/lib64/${PYTHON}/site-packages/torch"
 ENV PYTORCH_HOME="${VIRTUAL_ENV}/lib64/${PYTHON}/site-packages/torch"
