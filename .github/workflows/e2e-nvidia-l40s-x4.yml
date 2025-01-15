@@ -3,8 +3,6 @@
 name: E2E (NVIDIA L40S x4)
 
 on:
-  schedule:
-    - cron: '0 11 * * *' # Runs at 11AM UTC every day
   workflow_dispatch:
     inputs:
       pr_or_branch:
